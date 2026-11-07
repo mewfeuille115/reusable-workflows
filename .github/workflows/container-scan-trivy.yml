@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       image-name:
-        description: Nombre local de la imagen (sin tag)
+        description: Local image name (without tag)
         type: string
         required: true
       dockerfile:

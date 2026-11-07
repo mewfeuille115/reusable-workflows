@@ -4,9 +4,13 @@ on:
   workflow_call:
     inputs:
       solution-path:
-        description: Ruta a la solución (.sln/.slnx)
+        description: Path to the solution (.sln/.slnx)
         type: string
         required: true
+      exclude-projects:
+        description: Comma-separated project suffixes to exclude from the CI solution (e.g. the .esproj frontend, which dotnet restore does not support)
+        type: string
+        default: '.esproj'
       dotnet-version:
         type: string
         default: '10.0.x'
@@ -26,8 +30,40 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
+      - name: Prepare solution (exclude non-.NET projects)
+        id: sln
+        env:
+          SOLUTION: ${{ inputs.solution-path }}
+          EXCLUDE: ${{ inputs.exclude-projects }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import xml.etree.ElementTree as ET
+
+          src = os.environ["SOLUTION"]
+          patterns = [p.strip().lower() for p in os.environ["EXCLUDE"].split(",") if p.strip()]
+          out = src
+
+          if src.lower().endswith(".slnx") and patterns:
+              tree = ET.parse(src)
+              removed = []
+              for parent in list(tree.getroot().iter()):
+                  for child in list(parent):
+                      path = child.get("Path", "")
+                      if child.tag == "Project" and any(path.lower().endswith(p) for p in patterns):
+                          removed.append(path)
+                          parent.remove(child)
+              out = src[:-len(".slnx")] + ".ci.slnx"
+              tree.write(out, encoding="utf-8", xml_declaration=True)
+              print("Excluded from CI solution:", removed or "nothing")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"path={out}\n")
+          print("Solution used by CI:", out)
+          PYEOF
+
       - name: Restore
-        run: dotnet restore ${{ inputs.solution-path }}
+        run: dotnet restore ${{ steps.sln.outputs.path }}
 
       - name: Set up Snyk CLI
         uses: snyk/actions/setup@master
@@ -64,7 +100,7 @@ jobs:
         id: nuget_audit
         if: always()
         run: |
-          dotnet list ${{ inputs.solution-path }} package --vulnerable --include-transitive --format json > nuget-audit.json
+          dotnet list ${{ steps.sln.outputs.path }} package --vulnerable --include-transitive --format json > nuget-audit.json
           cat nuget-audit.json
 
           COUNT=$(python -c "

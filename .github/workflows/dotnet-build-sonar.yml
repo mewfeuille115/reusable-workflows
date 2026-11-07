@@ -6,6 +6,10 @@ on:
       solution-path:
         type: string
         required: true
+      exclude-projects:
+        description: Comma-separated project suffixes to exclude from the CI solution (e.g. the .esproj frontend, which dotnet restore does not support)
+        type: string
+        default: '.esproj'
       dotnet-version:
         type: string
         default: '10.0.x'
@@ -13,7 +17,7 @@ on:
         type: string
         default: Release
       run-sonar:
-        description: false en PRs desde forks (no tienen acceso a secrets)
+        description: Set to false for pull requests from forks (they do not have access to secrets)
         type: boolean
         default: true
       sonar-project-key:
@@ -23,7 +27,7 @@ on:
         type: string
         default: ''
       sonar-coverage-exclusions:
-        description: Patrones separados por coma excluidos de cobertura
+        description: Comma-separated patterns to exclude from coverage
         type: string
         default: '**/Migrations/**,**/*Dto.cs,**/Program.cs'
     secrets:
@@ -68,8 +72,40 @@ jobs:
         if: inputs.run-sonar
         run: dotnet tool install --global dotnet-sonarscanner
 
+      - name: Prepare solution (exclude non-.NET projects)
+        id: sln
+        env:
+          SOLUTION: ${{ inputs.solution-path }}
+          EXCLUDE: ${{ inputs.exclude-projects }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import xml.etree.ElementTree as ET
+
+          src = os.environ["SOLUTION"]
+          patterns = [p.strip().lower() for p in os.environ["EXCLUDE"].split(",") if p.strip()]
+          out = src
+
+          if src.lower().endswith(".slnx") and patterns:
+              tree = ET.parse(src)
+              removed = []
+              for parent in list(tree.getroot().iter()):
+                  for child in list(parent):
+                      path = child.get("Path", "")
+                      if child.tag == "Project" and any(path.lower().endswith(p) for p in patterns):
+                          removed.append(path)
+                          parent.remove(child)
+              out = src[:-len(".slnx")] + ".ci.slnx"
+              tree.write(out, encoding="utf-8", xml_declaration=True)
+              print("Excluded from CI solution:", removed or "nothing")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"path={out}\n")
+          print("Solution used by CI:", out)
+          PYEOF
+
       - name: Restore
-        run: dotnet restore "${{ inputs.solution-path }}"
+        run: dotnet restore "${{ steps.sln.outputs.path }}"
 
       - name: Sonar begin
         if: inputs.run-sonar
@@ -84,11 +120,11 @@ jobs:
             /d:sonar.qualitygate.wait=true
 
       - name: Build
-        run: dotnet build "${{ inputs.solution-path }}" --configuration ${{ inputs.configuration }} --no-restore
+        run: dotnet build "${{ steps.sln.outputs.path }}" --configuration ${{ inputs.configuration }} --no-restore
 
       - name: Test with coverage (Coverlet, OpenCover format)
         run: |
-          dotnet test "${{ inputs.solution-path }}" \
+          dotnet test "${{ steps.sln.outputs.path }}" \
             --configuration ${{ inputs.configuration }} --no-restore --no-build \
             --collect:"XPlat Code Coverage" \
             --results-directory ./TestResults \
