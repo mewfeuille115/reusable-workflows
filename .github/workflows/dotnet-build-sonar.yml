@@ -115,20 +115,22 @@ jobs:
             /o:"$SONAR_ORG" \
             /d:sonar.token="$SONAR_TOKEN" \
             /d:sonar.host.url="https://sonarcloud.io" \
-            /d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml" \
+            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
             /d:sonar.coverage.exclusions="$SONAR_COV_EXCL" \
             /d:sonar.qualitygate.wait=true
 
       - name: Build
         run: dotnet build "${{ steps.sln.outputs.path }}" --configuration ${{ inputs.configuration }} --no-restore
 
-      - name: Test with coverage (Coverlet, OpenCover format)
+      - name: Install dotnet-coverage
+        run: dotnet tool install --global dotnet-coverage
+
+      # Requires global.json with "test": { "runner": "Microsoft.Testing.Platform" } (.NET 10 SDK)
+      - name: Test with coverage (dotnet-coverage, XML format)
         run: |
-          dotnet test "${{ steps.sln.outputs.path }}" \
-            --configuration ${{ inputs.configuration }} --no-restore --no-build \
-            --collect:"XPlat Code Coverage" \
-            --results-directory ./TestResults \
-            -- DataCollectionRunSettings.DataCollector.Configuration.Format=opencover
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet-coverage collect -f xml -o coverage.xml \
+            "dotnet test --solution ${{ steps.sln.outputs.path }} --configuration ${{ inputs.configuration }} --no-restore --no-build"
 
       - name: Sonar end (waits for the Quality Gate)
         if: inputs.run-sonar
@@ -138,6 +140,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-opencover
-          path: TestResults/**/coverage.opencover.xml
+          name: coverage-xml
+          path: coverage.xml
           if-no-files-found: ignore
