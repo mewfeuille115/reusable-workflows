@@ -55,12 +55,14 @@ jobs:
           snyk monitor --all-projects --detection-depth=4
 
       - name: Set up Python (for SARIF conversion)
+        if: always()
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Run NuGet Audit (transitive vulnerabilities)
         id: nuget_audit
+        if: always()
         run: |
           dotnet list ${{ inputs.solution-path }} package --vulnerable --include-transitive --format json > nuget-audit.json
           cat nuget-audit.json
@@ -81,7 +83,7 @@ jobs:
           echo "Findings (High or above): $COUNT"
 
       - name: Convert NuGet Audit results to SARIF
-        if: always()
+        if: always() && hashFiles('nuget-audit.json') != ''
         run: |
           python - <<'PY'
           import json
@@ -135,14 +137,14 @@ jobs:
           PY
 
       - name: Upload NuGet Audit SARIF
-        if: always()
+        if: always() && hashFiles('nuget-audit.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: nuget-audit.sarif
           category: nuget-audit
 
       - name: Fail if NuGet Audit found vulnerabilities
-        if: steps.nuget_audit.outputs.found != '0'
+        if: always() && steps.nuget_audit.outputs.found != '' && steps.nuget_audit.outputs.found != '0'
         run: |
           echo "::error::dotnet list package --vulnerable found dependencies with severity High or above."
           exit 1
