@@ -30,6 +30,10 @@ on:
         description: Comma-separated patterns to exclude from coverage
         type: string
         default: '**/Migrations/**,**/*Dto.cs,**/Program.cs'
+      generated-secrets:
+        description: Comma-separated environment variable names to fill with random ephemeral values before the tests run (e.g. secrets that Testcontainers-based fixtures inject into throwaway containers)
+        type: string
+        default: ''
     secrets:
       SONAR_TOKEN:
         required: false
@@ -124,6 +128,20 @@ jobs:
 
       - name: Install dotnet-coverage
         run: dotnet tool install --global dotnet-coverage
+
+      # Values are random per run and never leave the runner: they only seed
+      # throwaway containers, so no repository secret is needed (works for forks too).
+      # ::add-mask:: is required because values written to GITHUB_ENV are not masked automatically.
+      - name: Generate ephemeral test secrets
+        if: inputs.generated-secrets != ''
+        env:
+          NAMES: ${{ inputs.generated-secrets }}
+        run: |
+          for name in ${NAMES//,/ }; do
+            value=$(openssl rand -hex 24)
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
 
       # Requires global.json with "test": { "runner": "Microsoft.Testing.Platform" } (.NET 10 SDK)
       - name: Test with coverage (dotnet-coverage, XML format)
