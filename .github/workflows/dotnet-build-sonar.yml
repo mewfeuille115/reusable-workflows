@@ -34,6 +34,22 @@ on:
         description: Comma-separated environment variable names to fill with random ephemeral values before the tests run (e.g. secrets that Testcontainers-based fixtures inject into throwaway containers)
         type: string
         default: ''
+      frontend-working-directory:
+        description: Optional frontend directory containing package.json and package-lock.json
+        type: string
+        default: ''
+      frontend-test-command:
+        description: Frontend command that generates coverage (for example npm ci && npm run test:coverage)
+        type: string
+        default: npm ci && npm run test:coverage
+      frontend-lcov-path:
+        description: Optional LCOV report path relative to the repository root
+        type: string
+        default: ''
+      frontend-node-version:
+        description: Node.js version used by the optional frontend test step
+        type: string
+        default: '22'
     secrets:
       SONAR_TOKEN:
         required: false
@@ -47,6 +63,7 @@ jobs:
       SONAR_KEY: ${{ inputs.sonar-project-key }}
       SONAR_ORG: ${{ inputs.sonar-organization }}
       SONAR_COV_EXCL: ${{ inputs.sonar-coverage-exclusions }}
+      SONAR_JS_LCOV_PATH: ${{ inputs.frontend-lcov-path }}
     steps:
       - name: Checkout (full history for Sonar blame / new code)
         uses: actions/checkout@v6
@@ -57,6 +74,14 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Setup Node
+        if: inputs.frontend-working-directory != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.frontend-node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend-working-directory }}/package-lock.json
 
       - name: Setup Java 17 (required by the Sonar scanner)
         if: inputs.run-sonar
@@ -111,10 +136,34 @@ jobs:
       - name: Restore
         run: dotnet restore "${{ steps.sln.outputs.path }}"
 
+      - name: Run frontend tests with coverage
+        if: inputs.frontend-working-directory != ''
+        working-directory: ${{ inputs.frontend-working-directory }}
+        env:
+          FRONTEND_TEST_COMMAND: ${{ inputs.frontend-test-command }}
+        run: bash -c "$FRONTEND_TEST_COMMAND"
+
+      # Sonar resuelve las rutas SF: del lcov desde la raiz del repo. Si son relativas al
+      # directorio del frontend, la cobertura queda en 0: se normalizan antes del analisis.
+      - name: Normalize frontend LCOV paths
+        if: inputs.frontend-working-directory != '' && inputs.frontend-lcov-path != ''
+        env:
+          FRONTEND_DIR: ${{ inputs.frontend-working-directory }}
+          LCOV_PATH: ${{ inputs.frontend-lcov-path }}
+        run: |
+          if [[ ! -f "$LCOV_PATH" ]]; then
+            echo "::warning::LCOV report not found at $LCOV_PATH"
+            exit 0
+          fi
+          # Solo prefija las rutas que no son absolutas ni empiezan ya por el directorio del frontend
+          sed -i -E "/^SF:/ { /^SF:(\/|[A-Za-z]:|${FRONTEND_DIR//\//\\/})/! s|^SF:|SF:${FRONTEND_DIR}/| }" "$LCOV_PATH"
+          echo "First SF entries:"
+          grep -m5 '^SF:' "$LCOV_PATH" || true
+
       - name: Sonar begin
         if: inputs.run-sonar
         run: |
-          dotnet sonarscanner begin \
+          sonar_args=(
             /k:"$SONAR_KEY" \
             /o:"$SONAR_ORG" \
             /d:sonar.token="$SONAR_TOKEN" \
@@ -122,6 +171,11 @@ jobs:
             /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
             /d:sonar.coverage.exclusions="$SONAR_COV_EXCL" \
             /d:sonar.qualitygate.wait=true
+          )
+          if [[ -n "$SONAR_JS_LCOV_PATH" ]]; then
+            sonar_args+=(/d:sonar.javascript.lcov.reportPaths="$SONAR_JS_LCOV_PATH")
+          fi
+          dotnet sonarscanner begin "${sonar_args[@]}"
 
       - name: Build
         run: dotnet build "${{ steps.sln.outputs.path }}" --configuration ${{ inputs.configuration }} --no-restore
@@ -158,6 +212,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-xml
-          path: coverage.xml
+          name: coverage-reports
+          path: |
+            coverage.xml
+            ${{ inputs.frontend-lcov-path }}
           if-no-files-found: ignore
