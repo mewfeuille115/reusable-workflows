@@ -168,7 +168,7 @@ jobs:
             /o:"$SONAR_ORG" \
             /d:sonar.token="$SONAR_TOKEN" \
             /d:sonar.host.url="https://sonarcloud.io" \
-            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
+            /d:sonar.cs.vscoveragexml.reportsPaths="**/TestResults/**/*.xml" \
             /d:sonar.coverage.exclusions="$SONAR_COV_EXCL" \
             /d:sonar.qualitygate.wait=true
           )
@@ -179,9 +179,6 @@ jobs:
 
       - name: Build
         run: dotnet build "${{ steps.sln.outputs.path }}" --configuration ${{ inputs.configuration }} --no-restore
-
-      - name: Install dotnet-coverage
-        run: dotnet tool install --global dotnet-coverage
 
       # Values are random per run and never leave the runner: they only seed
       # throwaway containers, so no repository secret is needed (works for forks too).
@@ -198,11 +195,12 @@ jobs:
           done
 
       # Requires global.json with "test": { "runner": "Microsoft.Testing.Platform" } (.NET 10 SDK)
-      - name: Test with coverage (dotnet-coverage, XML format)
+      - name: Test with coverage (MTP CodeCoverage, XML format)
         run: |
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          dotnet-coverage collect -f xml -o coverage.xml \
-            "dotnet test --solution ${{ steps.sln.outputs.path }} --configuration ${{ inputs.configuration }} --no-restore --no-build"
+          dotnet test --solution "${{ steps.sln.outputs.path }}" \
+            --configuration ${{ inputs.configuration }} \
+            --no-restore --no-build \
+            -- --coverage --coverage-output-format xml
 
       - name: Sonar end (waits for the Quality Gate)
         if: inputs.run-sonar
@@ -214,6 +212,6 @@ jobs:
         with:
           name: coverage-reports
           path: |
-            coverage.xml
+            **/TestResults/**/*.xml
             ${{ inputs.frontend-lcov-path }}
           if-no-files-found: ignore
